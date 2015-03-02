@@ -7,15 +7,16 @@
 class PriorityQueue
 {	
 private:
-	Node* head;
+  Node* head;
 public:
-	PriorityQueue();
-	~PriorityQueue();
-	bool contains(Node*);
-	void insert(Node*);
-	Node* pop();
-	void clear();
-	String toString();
+  PriorityQueue();
+  ~PriorityQueue();
+  bool contains(Node*);
+  void insert(Node*);
+  Node* pop();
+  void clear();
+  String toString();
 };
 
 #endif
+

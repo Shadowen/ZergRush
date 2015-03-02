@@ -108,8 +108,6 @@ void setup()
   Heartbeat.write(iMin2);
   Heartbeat.write(iMax2);
 
-  Heartbeat.sendByte(22, facing);
-
   findPath(0, 0, 5, 1);
 
   sendGrid(gridNodes);
@@ -144,11 +142,13 @@ void findPath(const byte& startX, const byte& startY, const byte& destX, const b
     const byte& x = currentNode->x;
     const byte& y = currentNode->y;
 
-    sendGrid(gridNodes);
-    Heartbeat.write(byte(13));
-    Heartbeat.write(byte(2));
-    Heartbeat.write(x);
-    Heartbeat.write(y);
+    // Allow Heartbeat to see the progress of the pathfinder
+    // WARNING: Significantly slows down pathfinder
+    //sendGrid(gridNodes);
+    //Heartbeat.write(byte(13));
+    //Heartbeat.write(byte(2));
+    //Heartbeat.write(x);
+    //Heartbeat.write(y);
 
     if (x == startX && y == startY)
     {
@@ -162,8 +162,8 @@ void findPath(const byte& startX, const byte& startY, const byte& destX, const b
     checkNode(x, y + 1, startX, startY, currentNode);
     checkNode(x, y - 1, startX, startY, currentNode);
   }
-  Heartbeat.sendMonitor("No path found :(");
   // No path found
+  Heartbeat.sendMonitor("No path found :(");
 }
 
 void checkNode(const byte& x, const byte& y, const byte& startX, const byte& startY, Node* parent)
@@ -346,7 +346,8 @@ void loop()
         }        
         else if (dx == -1){
           reqFacing = WEST;
-        }else{
+        }
+        else{
           Heartbeat.sendMonitor("Pathfinder attempted impossible turn");
         }
         char turnReq = reqFacing - facing;
@@ -361,7 +362,8 @@ void loop()
         else if (turnReq == 2 || turnReq == -2){
           aboutTurn = true;
           Heartbeat.sendMonitor("Turning around...");
-        }else{
+        }
+        else{
           straightTurn = true;
           Heartbeat.sendMonitor("Going straight...");
         }
@@ -423,9 +425,19 @@ void sendGrid(Node gridNodes[7][7])
   }
 }
 
-void callback(byte, byte, void*)
+void callback(byte id, byte length, void* data)
 {
+  char x;
+  char y;
+  switch(id){
+  case 6:
+    x = ((char*)data)[0];
+    y = ((char*)data)[1];
+    Heartbeat.sendMonitor("Obstacle added: (" + String(x + 0) + ", " + String(y + 0) + ")");
+    break;
+  }
 }
+
 
 
 
