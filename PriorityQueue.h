@@ -11,11 +11,11 @@ private:
 public:
   PriorityQueue();
   ~PriorityQueue();
-  bool contains(Node*);
+  bool contains(Node*) const;
   void insert(Node*);
   Node* pop();
   void clear();
-  String toString();
+  String toString() const;
 };
 
 #endif

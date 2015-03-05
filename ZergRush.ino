@@ -29,6 +29,12 @@ short iMax1 = SHRT_MIN;
 short iMin2 = SHRT_MAX;
 short iMax2 = SHRT_MIN;
 
+// Motor calibrations
+const int leftMotorSpeed = 255;
+const int rightMotorSpeed = leftMotorSpeed - 15;
+const float TURNING_RATIO = .75;
+const int turnStartDelay = 500;
+
 // Line following state machine
 boolean straightTurn = false;
 boolean rightTurn = false;
@@ -46,19 +52,22 @@ char facing;
 // What grid coordinates am I at?
 byte x;
 byte y;
-
+// Counter that keeps track of how many intersections we've passed
 int numIntersections = 0;
 
 // Pathfinding
-PriorityQueue openSet;
+// The nodes themselves
 Node gridNodes[7][7];
+// Data structure that keeps track of the nodes left to check
+PriorityQueue openSet;
 
 void setup()
 {
+  // Init pin setups
   pinMode(leftDirection, OUTPUT);
   pinMode(rightDirection, OUTPUT);
   pinMode(onboardLED, OUTPUT);
-
+  // Start Heartbeat
   Heartbeat.begin(callback);
 
   for (byte x = 0; x < 7; x++)
@@ -73,13 +82,9 @@ void setup()
   }
 
   Heartbeat.sendMonitor("Starting calibration...");
-  digitalWrite(leftDirection, HIGH);
-  digitalWrite(rightDirection, HIGH);
-  analogWrite(leftMotor, 100);
-  analogWrite(rightMotor, 100);
   unsigned long startTime = millis();
   unsigned long calTime = 0; // Time that we have been calibrating
-  while((calTime = millis() - startTime) < 5000){
+  while(true){
     short left = analogRead(leftPin);
     short right = analogRead(rightPin);
     short i1 = analogRead(iPin1);
@@ -93,6 +98,25 @@ void setup()
     iMax1 = max(i1, iMax1);
     iMin2 = min(i2, iMin2);
     iMax2 = max(i2, iMax2);
+
+    calTime = millis() - startTime;
+    if (calTime < 1000){
+      // Straight
+      digitalWrite(leftDirection, HIGH);
+      digitalWrite(rightDirection, HIGH);
+      analogWrite(leftMotor, leftMotorSpeed);
+      analogWrite(rightMotor, rightMotorSpeed);
+    }
+    else if (calTime < 2000){
+      // Left turn
+      digitalWrite(leftDirection, HIGH);
+      digitalWrite(rightDirection, HIGH);
+      analogWrite(leftMotor, 0);
+      analogWrite(rightMotor, rightMotorSpeed);
+    }
+    else{
+      break;
+    }
     delay(100);
   }
   Heartbeat.sendMonitor("Done calibrating!");
@@ -111,6 +135,14 @@ void setup()
   findPath(0, 0, 5, 1);
 
   sendGrid(gridNodes);
+
+  // Wait
+  digitalWrite(leftDirection, HIGH);
+  digitalWrite(rightDirection, HIGH);
+  analogWrite(leftMotor, 0);
+  analogWrite(rightMotor, 0);
+
+  delay(2000);
 }
 
 void findPath(const byte& startX, const byte& startY, const byte& destX, const byte& destY)
@@ -208,8 +240,8 @@ void loop()
     // Go straight across an intersection
     digitalWrite(leftDirection, HIGH);
     digitalWrite(rightDirection, HIGH);
-    analogWrite(leftMotor, 255);
-    analogWrite(rightMotor, 255);
+    analogWrite(leftMotor, leftMotorSpeed);
+    analogWrite(rightMotor, rightMotorSpeed);
     Heartbeat.sendMonitor("Straight Turn");
     if (millis() - lastIntersection > 500 && right >= LINE_THRESHOLD){
       straightTurn = false;
@@ -219,11 +251,11 @@ void loop()
     // Making a turn
     digitalWrite(leftDirection, HIGH);
     digitalWrite(rightDirection, LOW);
-    analogWrite(leftMotor, 255);
-    analogWrite(rightMotor, 25);
+    analogWrite(leftMotor, leftMotorSpeed);
+    analogWrite(rightMotor, TURNING_RATIO * rightMotorSpeed);
     Heartbeat.sendMonitor("Right Turn");
 
-    if (millis() - lastIntersection > 500 && right >= LINE_THRESHOLD){
+    if (millis() - lastIntersection > turnStartDelay && right >= LINE_THRESHOLD){
       rightTurn = false;
       // Update facing
       facing ++;
@@ -238,11 +270,11 @@ void loop()
     // Making a turn
     digitalWrite(leftDirection, LOW);
     digitalWrite(rightDirection, HIGH);
-    analogWrite(leftMotor, 25);
-    analogWrite(rightMotor, 255);
+    analogWrite(leftMotor, TURNING_RATIO * leftMotorSpeed);
+    analogWrite(rightMotor, rightMotorSpeed);
     Heartbeat.sendMonitor("Left Turn");
 
-    if (millis() - lastIntersection > 500 && left >= LINE_THRESHOLD){
+    if (millis() - lastIntersection > turnStartDelay && left >= LINE_THRESHOLD){
       leftTurn = false;
       // Update facing
       facing --;
@@ -257,11 +289,11 @@ void loop()
     // Making a turn
     digitalWrite(leftDirection, HIGH);
     digitalWrite(rightDirection, LOW);
-    analogWrite(leftMotor, 255);
-    analogWrite(rightMotor, 25);
+    analogWrite(leftMotor, leftMotorSpeed);
+    analogWrite(rightMotor, TURNING_RATIO * rightMotorSpeed);
     Heartbeat.sendMonitor("About Turn");
 
-    if (millis() - lastIntersection > 500 && left >= LINE_THRESHOLD){
+    if (millis() - lastIntersection > turnStartDelay && left >= LINE_THRESHOLD){
       aboutTurn = false;
       rightTurn = true;
       lastIntersection = millis();
@@ -281,7 +313,7 @@ void loop()
       // Both white, go right
       digitalWrite(leftDirection, HIGH);
       digitalWrite(rightDirection, HIGH);
-      analogWrite(leftMotor, 255);
+      analogWrite(leftMotor, 0);
       analogWrite(rightMotor, 0);
       Heartbeat.sendMonitor("Lost");
     }
@@ -289,16 +321,16 @@ void loop()
       // Go left
       digitalWrite(leftDirection, LOW);
       digitalWrite(rightDirection, HIGH);
-      analogWrite(leftMotor, 255);
-      analogWrite(rightMotor, 255);
+      analogWrite(leftMotor, 0);
+      analogWrite(rightMotor, rightMotorSpeed);
       Heartbeat.sendMonitor("Left");
     }
     else if (left >= LINE_THRESHOLD && right < LINE_THRESHOLD){
       // Go right
       digitalWrite(leftDirection, HIGH);
       digitalWrite(rightDirection, LOW);
-      analogWrite(leftMotor, 255);
-      analogWrite(rightMotor, 255);
+      analogWrite(leftMotor, leftMotorSpeed);
+      analogWrite(rightMotor, 0);
       Heartbeat.sendMonitor("Right");
     }    
     else{
@@ -367,21 +399,34 @@ void loop()
           straightTurn = true;
           Heartbeat.sendMonitor("Going straight...");
         }
+        // TODO debug
+        if (numIntersections % 2 == 0){
+          leftTurn = true;
+          rightTurn = false;
+          straightTurn = false;
+          aboutTurn = false;
+        } 
+        else if (numIntersections % 2 == 1){
+          leftTurn = false;
+          rightTurn = true;
+          straightTurn = false;
+          aboutTurn = false;
+        }
       }
       else
       {
         // Go straight
         digitalWrite(leftDirection, HIGH);
         digitalWrite(rightDirection, HIGH);
-        analogWrite(leftMotor, 255);
-        analogWrite(rightMotor, 255);
+        analogWrite(leftMotor, leftMotorSpeed);
+        analogWrite(rightMotor, rightMotorSpeed);
         Heartbeat.sendMonitor("Straight");
       }
     }
   } 
 
   Heartbeat.sendHeartbeat();
-  delay(500);
+  delay(100);
 }
 
 
@@ -437,14 +482,3 @@ void callback(byte id, byte length, void* data)
     break;
   }
 }
-
-
-
-
-
-
-
-
-
-
-

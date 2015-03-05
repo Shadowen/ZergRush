@@ -23,7 +23,7 @@ public:
     next = NULL;
   }
 
-  inline String toString()
+  inline String toString() const
   {
     return "(" + String(x) + ", " + String(y) + ")";
   }

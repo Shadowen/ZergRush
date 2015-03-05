@@ -11,7 +11,7 @@ PriorityQueue::~PriorityQueue()
   delete head;
 }
 
-bool PriorityQueue::contains(Node* toSearch)
+bool PriorityQueue::contains(Node* toSearch) const
 {
   // Go through list
   Node* node = head;
@@ -62,7 +62,7 @@ void PriorityQueue::clear()
   head->next = NULL;
 }
 
-String PriorityQueue::toString()
+String PriorityQueue::toString() const
 {
   String s = "";
   Node* node = head->next;
