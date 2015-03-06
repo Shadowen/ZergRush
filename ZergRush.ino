@@ -19,7 +19,7 @@ const int rightMotor = 6;
 const int onboardLED = 13;
 
 // Photoresistor calibrations
-const int LINE_THRESHOLD = 50;
+const int LINE_THRESHOLD = 20;
 short leftMin = SHRT_MAX;
 short leftMax = SHRT_MIN;
 short rightMin = SHRT_MAX;
@@ -32,7 +32,7 @@ short iMax2 = SHRT_MIN;
 // Motor calibrations
 const int leftMotorSpeed = 255;
 const int rightMotorSpeed = leftMotorSpeed - 15;
-const float TURNING_RATIO = .75;
+const float TURNING_RATIO = .80;
 const int turnStartDelay = 500;
 
 // Line following state machine
@@ -255,7 +255,7 @@ void loop()
     analogWrite(rightMotor, TURNING_RATIO * rightMotorSpeed);
     Heartbeat.sendMonitor("Right Turn");
 
-    if (millis() - lastIntersection > turnStartDelay && right >= LINE_THRESHOLD){
+    if (millis() - lastIntersection > turnStartDelay && left >= LINE_THRESHOLD){
       rightTurn = false;
       // Update facing
       facing ++;
@@ -274,7 +274,7 @@ void loop()
     analogWrite(rightMotor, rightMotorSpeed);
     Heartbeat.sendMonitor("Left Turn");
 
-    if (millis() - lastIntersection > turnStartDelay && left >= LINE_THRESHOLD){
+    if (millis() - lastIntersection > turnStartDelay && right >= LINE_THRESHOLD){
       leftTurn = false;
       // Update facing
       facing --;
@@ -321,7 +321,7 @@ void loop()
       // Go left
       digitalWrite(leftDirection, LOW);
       digitalWrite(rightDirection, HIGH);
-      analogWrite(leftMotor, 0);
+      analogWrite(leftMotor, 2/3 * leftMotorSpeed);
       analogWrite(rightMotor, rightMotorSpeed);
       Heartbeat.sendMonitor("Left");
     }
@@ -330,7 +330,7 @@ void loop()
       digitalWrite(leftDirection, HIGH);
       digitalWrite(rightDirection, LOW);
       analogWrite(leftMotor, leftMotorSpeed);
-      analogWrite(rightMotor, 0);
+      analogWrite(rightMotor, 2/3 * rightMotorSpeed);
       Heartbeat.sendMonitor("Right");
     }    
     else{
@@ -400,18 +400,10 @@ void loop()
           Heartbeat.sendMonitor("Going straight...");
         }
         // TODO debug
-        if (numIntersections % 2 == 0){
-          leftTurn = true;
-          rightTurn = false;
-          straightTurn = false;
-          aboutTurn = false;
-        } 
-        else if (numIntersections % 2 == 1){
-          leftTurn = false;
-          rightTurn = true;
-          straightTurn = false;
-          aboutTurn = false;
-        }
+        leftTurn = true;
+        rightTurn = false;
+        straightTurn = false;
+        aboutTurn = false;
       }
       else
       {
@@ -426,7 +418,7 @@ void loop()
   } 
 
   Heartbeat.sendHeartbeat();
-  delay(100);
+  delay(1);
 }
 
 
@@ -472,6 +464,8 @@ void sendGrid(Node gridNodes[7][7])
 
 void callback(byte id, byte length, void* data)
 {
+  Heartbeat.sendMonitor("Serial received!");
+
   char x;
   char y;
   switch(id){
@@ -482,3 +476,4 @@ void callback(byte id, byte length, void* data)
     break;
   }
 }
+
