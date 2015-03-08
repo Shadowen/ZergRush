@@ -1,38 +1,47 @@
 #include <limits.h>
+#include <VirtualWire.h>
 #include <Heartbeat.h>
 #include "Node.h"
 #include "PriorityQueue.h"
 
+// Pin assignments
 // Photoresistor pins
 const int iPin1 = A0;
 const int leftPin = A1;
 const int rightPin = A2;
 const int iPin2 = A3;
-
 // Motor pins
 const int leftDirection = 4;
 const int leftMotor = 5;
 const int rightDirection = 7;
 const int rightMotor = 6;
-
-// DEBUG: Onboard LED
+// RF Link kit
+const int rfrxPin = 11;
+const int rftxPin = 12;
+byte count = 1;
+// Onboard LED
 const int onboardLED = 13;
 
 // Photoresistor calibrations
-const int LINE_THRESHOLD = 20;
+/** LINE_THRESHOLD should be a number between 0 and 1, representing the "blackness" of line expected **/
+const float LINE_THRESHOLD = 0.2;
 short leftMin = SHRT_MAX;
 short leftMax = SHRT_MIN;
+short leftThreshold;
 short rightMin = SHRT_MAX;
 short rightMax = SHRT_MIN;
+short rightThreshold;
 short iMin1 = SHRT_MAX;
 short iMax1 = SHRT_MIN;
+short iThreshold1;
 short iMin2 = SHRT_MAX;
 short iMax2 = SHRT_MIN;
+short iThreshold2;
 
 // Motor calibrations
 const int leftMotorSpeed = 255;
 const int rightMotorSpeed = leftMotorSpeed - 15;
-const float TURNING_RATIO = .80;
+const float TURNING_RATIO = 0.80;
 const int turnStartDelay = 500;
 
 // Line following state machine
@@ -67,6 +76,10 @@ void setup()
   pinMode(leftDirection, OUTPUT);
   pinMode(rightDirection, OUTPUT);
   pinMode(onboardLED, OUTPUT);
+  vw_set_rx_pin(rfrxPin);
+  vw_set_tx_pin(rftxPin);
+  vw_setup(2000);
+  vw_rx_start();
   // Start Heartbeat
   Heartbeat.begin(callback);
 
@@ -120,6 +133,12 @@ void setup()
     delay(100);
   }
   Heartbeat.sendMonitor("Done calibrating!");
+  // Calculate thresholds
+  leftThreshold = (leftMax - leftMin) * LINE_THRESHOLD;
+  rightThreshold = (rightMax - rightMin) * LINE_THRESHOLD;
+  iThreshold1 = (iMax1 - iMin1) * LINE_THRESHOLD;
+  iThreshold2 = (iMax2 - iMin2) * LINE_THRESHOLD;
+
   // Send calibrations
   Heartbeat.write(byte(21));
   Heartbeat.write(byte(2*8));
@@ -223,11 +242,10 @@ void checkNode(const byte& x, const byte& y, const byte& startX, const byte& sta
 void loop()
 {
   // Read line follower sensors
-  const byte left = map(analogRead(leftPin), leftMin, leftMax, 0, 100);
-  const byte right = map(analogRead(rightPin), rightMin, rightMax, 0, 100);
-  const byte int1 = map(analogRead(iPin1), iMin1, iMax1, 0, 100);
-  const byte int2 =  map(analogRead(iPin2), iMin2, iMax2, 0, 100);
-  const byte intersection = min(int1, int2);
+  const byte left = analogRead(leftPin);
+  const byte right = analogRead(rightPin);
+  const byte int1 = analogRead(iPin1);
+  const byte int2 = analogRead(iPin2);
   // Send to computer
   Heartbeat.write(byte(24));
   Heartbeat.write(byte(4));
@@ -243,7 +261,7 @@ void loop()
     analogWrite(leftMotor, leftMotorSpeed);
     analogWrite(rightMotor, rightMotorSpeed);
     Heartbeat.sendMonitor("Straight Turn");
-    if (millis() - lastIntersection > 500 && right >= LINE_THRESHOLD){
+    if (millis() - lastIntersection > 500 && right >= rightThreshold){
       straightTurn = false;
     }
   }
@@ -255,7 +273,7 @@ void loop()
     analogWrite(rightMotor, TURNING_RATIO * rightMotorSpeed);
     Heartbeat.sendMonitor("Right Turn");
 
-    if (millis() - lastIntersection > turnStartDelay && left >= LINE_THRESHOLD){
+    if (millis() - lastIntersection > turnStartDelay && left >= leftThreshold){
       rightTurn = false;
       // Update facing
       facing ++;
@@ -274,7 +292,7 @@ void loop()
     analogWrite(rightMotor, rightMotorSpeed);
     Heartbeat.sendMonitor("Left Turn");
 
-    if (millis() - lastIntersection > turnStartDelay && right >= LINE_THRESHOLD){
+    if (millis() - lastIntersection > turnStartDelay && right >= rightThreshold){
       leftTurn = false;
       // Update facing
       facing --;
@@ -293,7 +311,7 @@ void loop()
     analogWrite(rightMotor, TURNING_RATIO * rightMotorSpeed);
     Heartbeat.sendMonitor("About Turn");
 
-    if (millis() - lastIntersection > turnStartDelay && left >= LINE_THRESHOLD){
+    if (millis() - lastIntersection > turnStartDelay && left >= leftThreshold){
       aboutTurn = false;
       rightTurn = true;
       lastIntersection = millis();
@@ -309,7 +327,7 @@ void loop()
   else
   {
     // Following the line
-    if (left < LINE_THRESHOLD && right < LINE_THRESHOLD){
+    if (left < leftThreshold && right < rightThreshold){
       // Both white, go right
       digitalWrite(leftDirection, HIGH);
       digitalWrite(rightDirection, HIGH);
@@ -317,7 +335,7 @@ void loop()
       analogWrite(rightMotor, 0);
       Heartbeat.sendMonitor("Lost");
     }
-    else if (left < LINE_THRESHOLD && right >= LINE_THRESHOLD){
+    else if (left < leftThreshold && right >= rightThreshold){
       // Go left
       digitalWrite(leftDirection, LOW);
       digitalWrite(rightDirection, HIGH);
@@ -325,7 +343,7 @@ void loop()
       analogWrite(rightMotor, rightMotorSpeed);
       Heartbeat.sendMonitor("Left");
     }
-    else if (left >= LINE_THRESHOLD && right < LINE_THRESHOLD){
+    else if (left >= leftThreshold && right < rightThreshold){
       // Go right
       digitalWrite(leftDirection, HIGH);
       digitalWrite(rightDirection, LOW);
@@ -335,7 +353,7 @@ void loop()
     }    
     else{
       // Intersection
-      if (intersection >= LINE_THRESHOLD){
+      if (int1 >= iThreshold1 && int2 >= iThreshold2){
         Heartbeat.sendMonitor("Intersection detected");
         // Update current location
         switch(facing){
@@ -418,7 +436,24 @@ void loop()
   } 
 
   Heartbeat.sendHeartbeat();
-  delay(1);
+  // RF Send
+  byte msg[1] = {
+    0  };
+  msg[0] = count++;
+  vw_send((uint8_t *)msg, 1);
+
+  // RF Receive
+  uint8_t buf[VW_MAX_MESSAGE_LEN];
+  uint8_t buflen = VW_MAX_MESSAGE_LEN;
+  if (vw_get_message(buf, &buflen)) // Non-blocking
+  {
+    // Message with a good checksum received, dump it.
+    Heartbeat.sendMonitor("Got: ");
+    Heartbeat.sendMonitor((char*)buf);
+    digitalWrite(onboardLED, HIGH);
+  }
+  delay(1000);
+  digitalWrite(onboardLED, LOW);
 }
 
 
@@ -476,4 +511,8 @@ void callback(byte id, byte length, void* data)
     break;
   }
 }
+
+
+
+
 
