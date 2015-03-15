@@ -1,5 +1,4 @@
 #include <limits.h>
-#include <VirtualWire.h>
 #include <Heartbeat.h>
 #include "Node.h"
 #include "PriorityQueue.h"
@@ -15,16 +14,12 @@ const int leftDirection = 4;
 const int leftMotor = 5;
 const int rightDirection = 7;
 const int rightMotor = 6;
-// RF Link kit
-const int rfrxPin = 11;
-const int rftxPin = 12;
-byte count = 1;
 // Onboard LED
 const int onboardLED = 13;
 
 // Photoresistor calibrations
 /** LINE_THRESHOLD should be a number between 0 and 1, representing the "blackness" of line expected **/
-const float LINE_THRESHOLD = 0.2;
+const float LINE_THRESHOLD = 0.3;
 short leftMin = SHRT_MAX;
 short leftMax = SHRT_MIN;
 short leftThreshold;
@@ -39,10 +34,10 @@ short iMax2 = SHRT_MIN;
 short iThreshold2;
 
 // Motor calibrations
-const int leftMotorSpeed = 255;
-const int rightMotorSpeed = leftMotorSpeed - 15;
-const float TURNING_RATIO = 0.80;
-const int turnStartDelay = 500;
+const int leftMotorSpeed = 170;
+const int rightMotorSpeed = leftMotorSpeed;
+const float TURNING_RATIO = 1.00;
+const int turnStartDelay = 250;
 
 // Line following state machine
 boolean straightTurn = false;
@@ -76,10 +71,6 @@ void setup()
   pinMode(leftDirection, OUTPUT);
   pinMode(rightDirection, OUTPUT);
   pinMode(onboardLED, OUTPUT);
-  vw_set_rx_pin(rfrxPin);
-  vw_set_tx_pin(rftxPin);
-  vw_setup(2000);
-  vw_rx_start();
   // Start Heartbeat
   Heartbeat.begin(callback);
 
@@ -97,11 +88,18 @@ void setup()
   Heartbeat.sendMonitor("Starting calibration...");
   unsigned long startTime = millis();
   unsigned long calTime = 0; // Time that we have been calibrating
-  while(true){
+  while (true) {
     short left = analogRead(leftPin);
     short right = analogRead(rightPin);
     short i1 = analogRead(iPin1);
     short i2 = analogRead(iPin2);
+    // Send to computer
+    Heartbeat.write(24);
+    Heartbeat.write(8);
+    Heartbeat.writeShort(left);
+    Heartbeat.writeShort(right);
+    Heartbeat.writeShort(i1);
+    Heartbeat.writeShort(i2);
 
     leftMin = min(left, leftMin);
     leftMax = max(left, leftMax);
@@ -113,43 +111,40 @@ void setup()
     iMax2 = max(i2, iMax2);
 
     calTime = millis() - startTime;
-    if (calTime < 1000){
-      // Straight
+    if (calTime < 500) {
+      // Forward
       digitalWrite(leftDirection, HIGH);
       digitalWrite(rightDirection, HIGH);
       analogWrite(leftMotor, leftMotorSpeed);
       analogWrite(rightMotor, rightMotorSpeed);
     }
-    else if (calTime < 2000){
-      // Left turn
-      digitalWrite(leftDirection, HIGH);
-      digitalWrite(rightDirection, HIGH);
-      analogWrite(leftMotor, 0);
+    else if (calTime < 1000)
+    {
+      // Backward
+      digitalWrite(leftDirection, LOW);
+      digitalWrite(rightDirection, LOW);
+      analogWrite(leftMotor, leftMotorSpeed);
       analogWrite(rightMotor, rightMotorSpeed);
     }
-    else{
+    else
+    {
       break;
     }
-    delay(100);
+    delay(10);
   }
   Heartbeat.sendMonitor("Done calibrating!");
   // Calculate thresholds
-  leftThreshold = (leftMax - leftMin) * LINE_THRESHOLD;
-  rightThreshold = (rightMax - rightMin) * LINE_THRESHOLD;
-  iThreshold1 = (iMax1 - iMin1) * LINE_THRESHOLD;
-  iThreshold2 = (iMax2 - iMin2) * LINE_THRESHOLD;
-
-  // Send calibrations
-  Heartbeat.write(byte(21));
-  Heartbeat.write(byte(2*8));
-  Heartbeat.write(leftMin);
-  Heartbeat.write(leftMax);
-  Heartbeat.write(rightMin);
-  Heartbeat.write(rightMax);
-  Heartbeat.write(iMin1);
-  Heartbeat.write(iMax1);
-  Heartbeat.write(iMin2);
-  Heartbeat.write(iMax2);
+  leftThreshold = (leftMax - leftMin) * LINE_THRESHOLD + leftMin;
+  rightThreshold = (rightMax - rightMin) * LINE_THRESHOLD + rightMin;
+  iThreshold1 = (iMax1 - iMin1) * LINE_THRESHOLD + iMin1;
+  iThreshold2 = (iMax2 - iMin2) * LINE_THRESHOLD + iMin2;
+  Heartbeat.sendMonitor(String(leftThreshold) + "\t" + String(rightThreshold) + "\t" + String(iThreshold1) + "\t" + String(iThreshold2));
+  Heartbeat.write(21);
+  Heartbeat.write(8);
+  Heartbeat.writeShort(leftThreshold);
+  Heartbeat.writeShort(rightThreshold);
+  Heartbeat.writeShort(iThreshold1);
+  Heartbeat.writeShort(iThreshold2);
 
   findPath(0, 0, 5, 1);
 
@@ -242,30 +237,30 @@ void checkNode(const byte& x, const byte& y, const byte& startX, const byte& sta
 void loop()
 {
   // Read line follower sensors
-  const byte left = analogRead(leftPin);
-  const byte right = analogRead(rightPin);
-  const byte int1 = analogRead(iPin1);
-  const byte int2 = analogRead(iPin2);
+  const short left = analogRead(leftPin);
+  const short right = analogRead(rightPin);
+  const short int1 = analogRead(iPin1);
+  const short int2 = analogRead(iPin2);
   // Send to computer
   Heartbeat.write(byte(24));
-  Heartbeat.write(byte(4));
-  Heartbeat.write(left);
-  Heartbeat.write(right);
-  Heartbeat.write(int1);
-  Heartbeat.write(int2);
+  Heartbeat.write(byte(8));
+  Heartbeat.writeShort(left);
+  Heartbeat.writeShort(right);
+  Heartbeat.writeShort(int1);
+  Heartbeat.writeShort(int2);
 
-  if (straightTurn){
+  if (straightTurn) {
     // Go straight across an intersection
     digitalWrite(leftDirection, HIGH);
     digitalWrite(rightDirection, HIGH);
     analogWrite(leftMotor, leftMotorSpeed);
     analogWrite(rightMotor, rightMotorSpeed);
     Heartbeat.sendMonitor("Straight Turn");
-    if (millis() - lastIntersection > 500 && right >= rightThreshold){
+    if (millis() - lastIntersection > turnStartDelay) {
       straightTurn = false;
     }
   }
-  else if (rightTurn){
+  else if (rightTurn) {
     // Making a turn
     digitalWrite(leftDirection, HIGH);
     digitalWrite(rightDirection, LOW);
@@ -273,18 +268,18 @@ void loop()
     analogWrite(rightMotor, TURNING_RATIO * rightMotorSpeed);
     Heartbeat.sendMonitor("Right Turn");
 
-    if (millis() - lastIntersection > turnStartDelay && left >= leftThreshold){
+    if (millis() - lastIntersection > turnStartDelay && left >= leftThreshold) {
       rightTurn = false;
       // Update facing
       facing ++;
-      if (facing > 3){
+      if (facing > 3) {
         facing = 0;
       }
       // Heartbeat(facing)
       Heartbeat.sendByte(14, facing);
     }
   }
-  else if (leftTurn){
+  else if (leftTurn) {
     // Making a turn
     digitalWrite(leftDirection, LOW);
     digitalWrite(rightDirection, HIGH);
@@ -292,18 +287,18 @@ void loop()
     analogWrite(rightMotor, rightMotorSpeed);
     Heartbeat.sendMonitor("Left Turn");
 
-    if (millis() - lastIntersection > turnStartDelay && right >= rightThreshold){
+    if (millis() - lastIntersection > turnStartDelay && right >= rightThreshold) {
       leftTurn = false;
       // Update facing
       facing --;
-      if (facing < 0){
+      if (facing < 0) {
         facing = 3;
       }
       // Heartbeat(facing)
       Heartbeat.sendByte(14, facing);
     }
   }
-  else if (aboutTurn){
+  else if (aboutTurn) {
     // Making a turn
     digitalWrite(leftDirection, HIGH);
     digitalWrite(rightDirection, LOW);
@@ -311,13 +306,13 @@ void loop()
     analogWrite(rightMotor, TURNING_RATIO * rightMotorSpeed);
     Heartbeat.sendMonitor("About Turn");
 
-    if (millis() - lastIntersection > turnStartDelay && left >= leftThreshold){
+    if (millis() - lastIntersection > turnStartDelay && left >= leftThreshold) {
       aboutTurn = false;
       rightTurn = true;
       lastIntersection = millis();
       // Update facing
       facing ++;
-      if (facing > 3){
+      if (facing > 3) {
         facing = 0;
       }
       // Heartbeat(facing)
@@ -327,49 +322,49 @@ void loop()
   else
   {
     // Following the line
-    if (left < leftThreshold && right < rightThreshold){
-      // Both white, go right
-      digitalWrite(leftDirection, HIGH);
-      digitalWrite(rightDirection, HIGH);
+    if (left < leftThreshold && right < rightThreshold) {
+      // Both white, lost
+      digitalWrite(leftDirection, LOW);
+      digitalWrite(rightDirection, LOW);
       analogWrite(leftMotor, 0);
       analogWrite(rightMotor, 0);
       Heartbeat.sendMonitor("Lost");
     }
-    else if (left < leftThreshold && right >= rightThreshold){
-      // Go left
-      digitalWrite(leftDirection, LOW);
-      digitalWrite(rightDirection, HIGH);
-      analogWrite(leftMotor, 2/3 * leftMotorSpeed);
-      analogWrite(rightMotor, rightMotorSpeed);
-      Heartbeat.sendMonitor("Left");
-    }
-    else if (left >= leftThreshold && right < rightThreshold){
+    else if (left < leftThreshold && right >= rightThreshold) {
       // Go right
       digitalWrite(leftDirection, HIGH);
       digitalWrite(rightDirection, LOW);
       analogWrite(leftMotor, leftMotorSpeed);
-      analogWrite(rightMotor, 2/3 * rightMotorSpeed);
+      analogWrite(rightMotor, 2 / 3 * rightMotorSpeed);
       Heartbeat.sendMonitor("Right");
-    }    
-    else{
+    }
+    else if (left >= leftThreshold && right < rightThreshold) {
+      // Go left
+      digitalWrite(leftDirection, LOW);
+      digitalWrite(rightDirection, HIGH);
+      analogWrite(leftMotor, 2 / 3 * leftMotorSpeed);
+      analogWrite(rightMotor, rightMotorSpeed);
+      Heartbeat.sendMonitor("Left");
+    }
+    else {
       // Intersection
-      if (int1 >= iThreshold1 && int2 >= iThreshold2){
+      if (int1 >= iThreshold1 && int2 >= iThreshold2) {
         Heartbeat.sendMonitor("Intersection detected");
         // Update current location
-        switch(facing){
-        case NORTH:
-          y++;
-          break;
-        case EAST:
-          x ++;
-          break;
-        case SOUTH:
-          y--;
-          break;
-        case WEST:
-          x--;
-          break;
-        }  
+        switch (facing) {
+          case NORTH:
+            y++;
+            break;
+          case EAST:
+            x ++;
+            break;
+          case SOUTH:
+            y--;
+            break;
+          case WEST:
+            x--;
+            break;
+        }
         lastIntersection = millis();
         numIntersections++;
         // Heartbeat(current position)
@@ -387,33 +382,33 @@ void loop()
         if (dy == 1)
         {
           reqFacing = NORTH;
-        }        
-        else if (dx == 1){
+        }
+        else if (dx == 1) {
           reqFacing = EAST;
         }
-        else if (dy == -1){
+        else if (dy == -1) {
           reqFacing = SOUTH;
-        }        
-        else if (dx == -1){
+        }
+        else if (dx == -1) {
           reqFacing = WEST;
         }
-        else{
+        else {
           Heartbeat.sendMonitor("Pathfinder attempted impossible turn");
         }
         char turnReq = reqFacing - facing;
-        if (turnReq == 1 || turnReq == -3){
+        if (turnReq == 1 || turnReq == -3) {
           rightTurn = true;
           Heartbeat.sendMonitor("Turning right...");
         }
-        else if (turnReq == -1 || turnReq == 3){
+        else if (turnReq == -1 || turnReq == 3) {
           leftTurn = true;
           Heartbeat.sendMonitor("Turning left...");
         }
-        else if (turnReq == 2 || turnReq == -2){
+        else if (turnReq == 2 || turnReq == -2) {
           aboutTurn = true;
           Heartbeat.sendMonitor("Turning around...");
         }
-        else{
+        else {
           straightTurn = true;
           Heartbeat.sendMonitor("Going straight...");
         }
@@ -433,34 +428,17 @@ void loop()
         Heartbeat.sendMonitor("Straight");
       }
     }
-  } 
+  }
 
   Heartbeat.sendHeartbeat();
-  // RF Send
-  byte msg[1] = {
-    0  };
-  msg[0] = count++;
-  vw_send((uint8_t *)msg, 1);
-
-  // RF Receive
-  uint8_t buf[VW_MAX_MESSAGE_LEN];
-  uint8_t buflen = VW_MAX_MESSAGE_LEN;
-  if (vw_get_message(buf, &buflen)) // Non-blocking
-  {
-    // Message with a good checksum received, dump it.
-    Heartbeat.sendMonitor("Got: ");
-    Heartbeat.sendMonitor((char*)buf);
-    digitalWrite(onboardLED, HIGH);
-  }
-  delay(1000);
-  digitalWrite(onboardLED, LOW);
+  delay(10);
 }
 
 
 void sendGrid(Node gridNodes[7][7])
 {
   Heartbeat.write(byte(10));
-  Heartbeat.write(byte(7*7*2));
+  Heartbeat.write(byte(7 * 7 * 2));
   for (byte x = 0; x < 7; x++)
   {
     for (byte y = 0; y < 7; y++)
@@ -472,7 +450,7 @@ void sendGrid(Node gridNodes[7][7])
   }
 
   Heartbeat.write(byte(11));
-  Heartbeat.write(byte(7*7*2));
+  Heartbeat.write(byte(7 * 7 * 2));
   for (byte x = 0; x < 7; x++)
   {
     for (byte y = 0; y < 7; y++)
@@ -484,7 +462,7 @@ void sendGrid(Node gridNodes[7][7])
   }
 
   Heartbeat.write(byte(12));
-  Heartbeat.write(byte(7*7*3));
+  Heartbeat.write(byte(7 * 7 * 3));
   for (byte x = 0; x < 7; x++)
   {
     for (byte y = 0; y < 7; y++)
@@ -503,14 +481,16 @@ void callback(byte id, byte length, void* data)
 
   char x;
   char y;
-  switch(id){
-  case 6:
-    x = ((char*)data)[0];
-    y = ((char*)data)[1];
-    Heartbeat.sendMonitor("Obstacle added: (" + String(x + 0) + ", " + String(y + 0) + ")");
-    break;
+  switch (id) {
+    case 6:
+      x = ((char*)data)[0];
+      y = ((char*)data)[1];
+      Heartbeat.sendMonitor("Obstacle added: (" + String(x + 0) + ", " + String(y + 0) + ")");
+      break;
   }
 }
+
+
 
 
 
