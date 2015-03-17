@@ -20,24 +20,24 @@ const int onboardLED = 13;
 // Photoresistor calibrations
 /** LINE_THRESHOLD should be a number between 0 and 1, representing the "blackness" of line expected **/
 const float LINE_THRESHOLD = 0.3;
-short leftMin = SHRT_MAX;
-short leftMax = SHRT_MIN;
+short leftMin;
+short leftMax;
 short leftThreshold;
-short rightMin = SHRT_MAX;
-short rightMax = SHRT_MIN;
+short rightMin;
+short rightMax;
 short rightThreshold;
-short iMin1 = SHRT_MAX;
-short iMax1 = SHRT_MIN;
+short iMin1;
+short iMax1;
 short iThreshold1;
-short iMin2 = SHRT_MAX;
-short iMax2 = SHRT_MIN;
+short iMin2;
+short iMax2;
 short iThreshold2;
 
 // Motor calibrations
-const int leftMotorSpeed = 170;
+const int leftMotorSpeed = 200;
 const int rightMotorSpeed = leftMotorSpeed;
-const float TURNING_RATIO = 1.00;
-const int turnStartDelay = 250;
+const float TURNING_RATIO = 0.8;
+const int turnStartDelay = 500;
 
 // Line following state machine
 boolean straightTurn = false;
@@ -86,8 +86,15 @@ void setup()
   }
 
   Heartbeat.sendMonitor("Starting calibration...");
+  leftMin = SHRT_MAX;
+  leftMax = SHRT_MIN;
+  rightMin = SHRT_MAX;
+  rightMax = SHRT_MIN;
+  iMin1 = SHRT_MAX;
+  iMax1 = SHRT_MIN;
+  iMin2 = SHRT_MAX;
+  iMax2 = SHRT_MIN;
   unsigned long startTime = millis();
-  unsigned long calTime = 0; // Time that we have been calibrating
   while (true) {
     short left = analogRead(leftPin);
     short right = analogRead(rightPin);
@@ -110,7 +117,8 @@ void setup()
     iMin2 = min(i2, iMin2);
     iMax2 = max(i2, iMax2);
 
-    calTime = millis() - startTime;
+    // Time since we have started the calibration
+    unsigned long calTime = millis() - startTime;
     if (calTime < 500) {
       // Forward
       digitalWrite(leftDirection, HIGH);
@@ -132,6 +140,11 @@ void setup()
     }
     delay(10);
   }
+  // Wait
+  digitalWrite(leftDirection, HIGH);
+  digitalWrite(rightDirection, HIGH);
+  analogWrite(leftMotor, 0);
+  analogWrite(rightMotor, 0);
   Heartbeat.sendMonitor("Done calibrating!");
   // Calculate thresholds
   leftThreshold = (leftMax - leftMin) * LINE_THRESHOLD + leftMin;
@@ -149,12 +162,6 @@ void setup()
   findPath(0, 0, 5, 1);
 
   sendGrid(gridNodes);
-
-  // Wait
-  digitalWrite(leftDirection, HIGH);
-  digitalWrite(rightDirection, HIGH);
-  analogWrite(leftMotor, 0);
-  analogWrite(rightMotor, 0);
 
   delay(2000);
 }
@@ -283,7 +290,7 @@ void loop()
     // Making a turn
     digitalWrite(leftDirection, LOW);
     digitalWrite(rightDirection, HIGH);
-    analogWrite(leftMotor, TURNING_RATIO * leftMotorSpeed);
+    analogWrite(leftMotor, leftMotorSpeed);
     analogWrite(rightMotor, rightMotorSpeed);
     Heartbeat.sendMonitor("Left Turn");
 
