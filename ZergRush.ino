@@ -2,6 +2,7 @@
 #include <Heartbeat.h>
 #include "Node.h"
 #include "PriorityQueue.h"
+#include "Hopper.h"
 
 // Pin assignments
 // Photoresistor pins
@@ -14,6 +15,11 @@ const int leftDirection = 4;
 const int leftMotor = 5;
 const int rightDirection = 7;
 const int rightMotor = 6;
+// Encoders - interrupts are pins 2 and 3 (INT0, INT1);
+const int leftEncoderInterruptPin = 0;
+const int rightEncoderInterruptPin = 1;
+const int leftEncoderPin = 2;
+const int rightEncoderPin = 3;
 // Onboard LED
 const int onboardLED = 13;
 
@@ -34,17 +40,24 @@ short iMax2;
 short iThreshold2;
 
 // Motor calibrations
-const int leftMotorSpeed = 200;
-const int rightMotorSpeed = leftMotorSpeed;
+const short leftMotorSpeed = 200;
+const short rightMotorSpeed = leftMotorSpeed;
 const float TURNING_RATIO = 0.8;
-const int turnStartDelay = 500;
+const short turnStartDelay = 500;
 
 // Line following state machine
-boolean straightTurn = false;
-boolean rightTurn = false;
-boolean leftTurn = false;
-boolean aboutTurn = false;
+const char STATE_LINE_FOLLOWING = 0;
+const char STATE_STRAIGHT = 1;
+const char STATE_LEFT_TURN = 2;
+const char STATE_RIGHT_TURN = 3;
+const char STATE_ABOUT_TURN = 4;
+char robotState = STATE_LINE_FOLLOWING;
+// Time at which we last saw an intersection
 unsigned long lastIntersection = 0;
+
+// Encoder counts
+volatile int leftCount = 0;
+volatile int rightCount = 0;
 
 // Navigation
 // Which cardinal direction the robot is facing
@@ -65,12 +78,24 @@ Node gridNodes[7][7];
 // Data structure that keeps track of the nodes left to check
 PriorityQueue openSet;
 
+// Hopper tracking
+// Conversion factors from hopper to actual coordinates
+const char xScale = 20;
+const char xOffset = 42;
+const char yScale = 20;
+const char yOffset = 58;
+// Hopper variables
+Hopper hoppers[2];
+char countHoppers = 0;
+
 void setup()
 {
   // Init pin setups
   pinMode(leftDirection, OUTPUT);
   pinMode(rightDirection, OUTPUT);
   pinMode(onboardLED, OUTPUT);
+  attachInterrupt(leftEncoderInterruptPin, leftEncoderISR, RISING);
+  attachInterrupt(rightEncoderInterruptPin, rightEncoderISR, RISING);
   // Start Heartbeat
   Heartbeat.begin(callback);
 
@@ -151,7 +176,7 @@ void setup()
   rightThreshold = (rightMax - rightMin) * LINE_THRESHOLD + rightMin;
   iThreshold1 = (iMax1 - iMin1) * LINE_THRESHOLD + iMin1;
   iThreshold2 = (iMax2 - iMin2) * LINE_THRESHOLD + iMin2;
-  Heartbeat.sendMonitor(String(leftThreshold) + "\t" + String(rightThreshold) + "\t" + String(iThreshold1) + "\t" + String(iThreshold2));
+  // Send thresholds to Heartbeat
   Heartbeat.write(21);
   Heartbeat.write(8);
   Heartbeat.writeShort(leftThreshold);
@@ -159,8 +184,8 @@ void setup()
   Heartbeat.writeShort(iThreshold1);
   Heartbeat.writeShort(iThreshold2);
 
+  // TODO use pathfinding
   findPath(0, 0, 5, 1);
-
   sendGrid(gridNodes);
 
   delay(2000);
@@ -248,7 +273,7 @@ void loop()
   const short right = analogRead(rightPin);
   const short int1 = analogRead(iPin1);
   const short int2 = analogRead(iPin2);
-  // Send to computer
+  // Send sensor readings to Heartbeat
   Heartbeat.write(byte(24));
   Heartbeat.write(byte(8));
   Heartbeat.writeShort(left);
@@ -256,185 +281,183 @@ void loop()
   Heartbeat.writeShort(int1);
   Heartbeat.writeShort(int2);
 
-  if (straightTurn) {
-    // Go straight across an intersection
-    digitalWrite(leftDirection, HIGH);
-    digitalWrite(rightDirection, HIGH);
-    analogWrite(leftMotor, leftMotorSpeed);
-    analogWrite(rightMotor, rightMotorSpeed);
-    Heartbeat.sendMonitor("Straight Turn");
-    if (millis() - lastIntersection > turnStartDelay) {
-      straightTurn = false;
-    }
-  }
-  else if (rightTurn) {
-    // Making a turn
-    digitalWrite(leftDirection, HIGH);
-    digitalWrite(rightDirection, LOW);
-    analogWrite(leftMotor, leftMotorSpeed);
-    analogWrite(rightMotor, TURNING_RATIO * rightMotorSpeed);
-    Heartbeat.sendMonitor("Right Turn");
-
-    if (millis() - lastIntersection > turnStartDelay && left >= leftThreshold) {
-      rightTurn = false;
-      // Update facing
-      facing ++;
-      if (facing > 3) {
-        facing = 0;
+  switch (robotState) {
+    case STATE_LINE_FOLLOWING:
+      // Following the line
+      if (left < leftThreshold && right < rightThreshold) {
+        // Both white, lost
+        digitalWrite(leftDirection, LOW);
+        digitalWrite(rightDirection, LOW);
+        analogWrite(leftMotor, 0);
+        analogWrite(rightMotor, 0);
+        Heartbeat.sendMonitor("Lost");
       }
-      // Heartbeat(facing)
-      Heartbeat.sendByte(14, facing);
-    }
-  }
-  else if (leftTurn) {
-    // Making a turn
-    digitalWrite(leftDirection, LOW);
-    digitalWrite(rightDirection, HIGH);
-    analogWrite(leftMotor, leftMotorSpeed);
-    analogWrite(rightMotor, rightMotorSpeed);
-    Heartbeat.sendMonitor("Left Turn");
-
-    if (millis() - lastIntersection > turnStartDelay && right >= rightThreshold) {
-      leftTurn = false;
-      // Update facing
-      facing --;
-      if (facing < 0) {
-        facing = 3;
+      else if (left < leftThreshold && right >= rightThreshold) {
+        // Go right
+        digitalWrite(leftDirection, HIGH);
+        digitalWrite(rightDirection, LOW);
+        analogWrite(leftMotor, leftMotorSpeed);
+        analogWrite(rightMotor, 2 / 3 * rightMotorSpeed);
+        Heartbeat.sendMonitor("Right");
       }
-      // Heartbeat(facing)
-      Heartbeat.sendByte(14, facing);
-    }
-  }
-  else if (aboutTurn) {
-    // Making a turn
-    digitalWrite(leftDirection, HIGH);
-    digitalWrite(rightDirection, LOW);
-    analogWrite(leftMotor, leftMotorSpeed);
-    analogWrite(rightMotor, TURNING_RATIO * rightMotorSpeed);
-    Heartbeat.sendMonitor("About Turn");
-
-    if (millis() - lastIntersection > turnStartDelay && left >= leftThreshold) {
-      aboutTurn = false;
-      rightTurn = true;
-      lastIntersection = millis();
-      // Update facing
-      facing ++;
-      if (facing > 3) {
-        facing = 0;
+      else if (left >= leftThreshold && right < rightThreshold) {
+        // Go left
+        digitalWrite(leftDirection, LOW);
+        digitalWrite(rightDirection, HIGH);
+        analogWrite(leftMotor, 2 / 3 * leftMotorSpeed);
+        analogWrite(rightMotor, rightMotorSpeed);
+        Heartbeat.sendMonitor("Left");
       }
-      // Heartbeat(facing)
-      Heartbeat.sendByte(14, facing);
-    }
-  }
-  else
-  {
-    // Following the line
-    if (left < leftThreshold && right < rightThreshold) {
-      // Both white, lost
-      digitalWrite(leftDirection, LOW);
-      digitalWrite(rightDirection, LOW);
-      analogWrite(leftMotor, 0);
-      analogWrite(rightMotor, 0);
-      Heartbeat.sendMonitor("Lost");
-    }
-    else if (left < leftThreshold && right >= rightThreshold) {
-      // Go right
-      digitalWrite(leftDirection, HIGH);
-      digitalWrite(rightDirection, LOW);
-      analogWrite(leftMotor, leftMotorSpeed);
-      analogWrite(rightMotor, 2 / 3 * rightMotorSpeed);
-      Heartbeat.sendMonitor("Right");
-    }
-    else if (left >= leftThreshold && right < rightThreshold) {
-      // Go left
-      digitalWrite(leftDirection, LOW);
-      digitalWrite(rightDirection, HIGH);
-      analogWrite(leftMotor, 2 / 3 * leftMotorSpeed);
-      analogWrite(rightMotor, rightMotorSpeed);
-      Heartbeat.sendMonitor("Left");
-    }
-    else {
-      // Intersection
-      if (int1 >= iThreshold1 && int2 >= iThreshold2) {
-        Heartbeat.sendMonitor("Intersection detected");
-        // Update current location
-        switch (facing) {
-          case NORTH:
-            y++;
-            break;
-          case EAST:
-            x ++;
-            break;
-          case SOUTH:
-            y--;
-            break;
-          case WEST:
-            x--;
-            break;
+      else {
+        // Intersection
+        if (int1 >= iThreshold1 && int2 >= iThreshold2) {
+          Heartbeat.sendMonitor("Intersection detected");
+          // Update current location
+          switch (facing) {
+            case NORTH:
+              y++;
+              break;
+            case EAST:
+              x ++;
+              break;
+            case SOUTH:
+              y--;
+              break;
+            case WEST:
+              x--;
+              break;
+          }
+          lastIntersection = millis();
+          numIntersections++;
+          // Heartbeat(current position)
+          Heartbeat.write(byte(13));
+          Heartbeat.write(byte(2));
+          Heartbeat.write(x);
+          Heartbeat.write(y);
+
+          // Make a decision on which way to turn by referring to Pathfinder
+          const Node& currentNode = gridNodes[x][y];
+          const Node& destNode = *(currentNode.parent);
+          const char dx = destNode.x - currentNode.x;
+          const char dy = destNode.y - currentNode.y;
+          char reqFacing;
+          if (dy == 1)
+          {
+            reqFacing = NORTH;
+          }
+          else if (dx == 1) {
+            reqFacing = EAST;
+          }
+          else if (dy == -1) {
+            reqFacing = SOUTH;
+          }
+          else if (dx == -1) {
+            reqFacing = WEST;
+          }
+          else {
+            Heartbeat.sendMonitor("Pathfinder attempted impossible turn");
+          }
+          char turnReq = reqFacing - facing;
+          if (turnReq == 1 || turnReq == -3) {
+            robotState = STATE_RIGHT_TURN;
+            Heartbeat.sendMonitor("Turning right...");
+          }
+          else if (turnReq == -1 || turnReq == 3) {
+            robotState = STATE_LEFT_TURN;
+            Heartbeat.sendMonitor("Turning left...");
+          }
+          else if (turnReq == 2 || turnReq == -2) {
+            robotState = STATE_ABOUT_TURN;
+            Heartbeat.sendMonitor("Turning around...");
+          }
+          else {
+            robotState = STATE_STRAIGHT;
+            Heartbeat.sendMonitor("Going straight...");
+          }
         }
-        lastIntersection = millis();
-        numIntersections++;
-        // Heartbeat(current position)
-        Heartbeat.write(byte(13));
-        Heartbeat.write(byte(2));
-        Heartbeat.write(x);
-        Heartbeat.write(y);
-
-        // Make a decision on which way to turn by referring to Pathfinder
-        const Node& currentNode = gridNodes[x][y];
-        const Node& destNode = *(currentNode.parent);
-        const char dx = destNode.x - currentNode.x;
-        const char dy = destNode.y - currentNode.y;
-        char reqFacing;
-        if (dy == 1)
+        else
         {
-          reqFacing = NORTH;
+          // Go straight
+          digitalWrite(leftDirection, HIGH);
+          digitalWrite(rightDirection, HIGH);
+          analogWrite(leftMotor, leftMotorSpeed);
+          analogWrite(rightMotor, rightMotorSpeed);
+          Heartbeat.sendMonitor("Straight");
         }
-        else if (dx == 1) {
-          reqFacing = EAST;
-        }
-        else if (dy == -1) {
-          reqFacing = SOUTH;
-        }
-        else if (dx == -1) {
-          reqFacing = WEST;
-        }
-        else {
-          Heartbeat.sendMonitor("Pathfinder attempted impossible turn");
-        }
-        char turnReq = reqFacing - facing;
-        if (turnReq == 1 || turnReq == -3) {
-          rightTurn = true;
-          Heartbeat.sendMonitor("Turning right...");
-        }
-        else if (turnReq == -1 || turnReq == 3) {
-          leftTurn = true;
-          Heartbeat.sendMonitor("Turning left...");
-        }
-        else if (turnReq == 2 || turnReq == -2) {
-          aboutTurn = true;
-          Heartbeat.sendMonitor("Turning around...");
-        }
-        else {
-          straightTurn = true;
-          Heartbeat.sendMonitor("Going straight...");
-        }
-        // TODO debug
-        leftTurn = true;
-        rightTurn = false;
-        straightTurn = false;
-        aboutTurn = false;
-      }
-      else
-      {
-        // Go straight
+        break;
+      case STATE_STRAIGHT:
+        // Go straight across an intersection
         digitalWrite(leftDirection, HIGH);
         digitalWrite(rightDirection, HIGH);
         analogWrite(leftMotor, leftMotorSpeed);
         analogWrite(rightMotor, rightMotorSpeed);
-        Heartbeat.sendMonitor("Straight");
+        Heartbeat.sendMonitor("Straight Turn");
+        if (millis() - lastIntersection > turnStartDelay && int1 < iThreshold1 && int2 < iThreshold2) {
+          robotState = STATE_LINE_FOLLOWING;
+        }
+        break;
+      case STATE_RIGHT_TURN:
+        // Making a turn
+        digitalWrite(leftDirection, HIGH);
+        digitalWrite(rightDirection, LOW);
+        analogWrite(leftMotor, leftMotorSpeed);
+        analogWrite(rightMotor, TURNING_RATIO * rightMotorSpeed);
+        Heartbeat.sendMonitor("Right Turn");
+
+        if (millis() - lastIntersection > turnStartDelay && left >= leftThreshold) {
+          robotState = STATE_LINE_FOLLOWING;
+          // Update facing
+          facing ++;
+          if (facing > 3) {
+            facing = 0;
+          }
+          // Heartbeat(facing)
+          Heartbeat.sendByte(14, facing);
+        }
+        break;
+      case STATE_LEFT_TURN:
+        // Making a turn
+        digitalWrite(leftDirection, LOW);
+        digitalWrite(rightDirection, HIGH);
+        analogWrite(leftMotor, TURNING_RATIO * leftMotorSpeed);
+        analogWrite(rightMotor, rightMotorSpeed);
+        Heartbeat.sendMonitor("Left Turn");
+
+        if (millis() - lastIntersection > turnStartDelay && right >= rightThreshold) {
+          robotState = STATE_LINE_FOLLOWING;
+          // Update facing
+          facing --;
+          if (facing < 0) {
+            facing = 3;
+          }
+          // Heartbeat(facing)
+          Heartbeat.sendByte(14, facing);
+        }
+        break;
+      case STATE_ABOUT_TURN:
+        // Making a turn
+        digitalWrite(leftDirection, HIGH);
+        digitalWrite(rightDirection, LOW);
+        analogWrite(leftMotor, leftMotorSpeed);
+        analogWrite(rightMotor, TURNING_RATIO * rightMotorSpeed);
+        Heartbeat.sendMonitor("About Turn");
+
+        if (millis() - lastIntersection > turnStartDelay && left >= leftThreshold) {
+          robotState = STATE_RIGHT_TURN;
+          lastIntersection = millis();
+          // Update facing
+          facing ++;
+          if (facing > 3) {
+            facing = 0;
+          }
+          // Heartbeat(facing)
+          Heartbeat.sendByte(14, facing);
+        }
+        break;
+      default:
+        Heartbeat.sendMonitor("Invalid robot state!");
+        // Invalid state
       }
-    }
   }
 
   Heartbeat.sendHeartbeat();
@@ -488,18 +511,28 @@ void callback(byte id, byte length, void* data)
 
   char x;
   char y;
+  char orientation;
   switch (id) {
     case 6:
       x = ((char*)data)[0];
       y = ((char*)data)[1];
-      Heartbeat.sendMonitor("Obstacle added: (" + String(x + 0) + ", " + String(y + 0) + ")");
+      orientation = *((bool *)(((char*)data) + 2));
+      Heartbeat.sendMonitor("Obstacle added: (" + String(x + 0) + ", " + String(y + 0) + "[" + String(orientation) + "]" + ")");
+      hoppers[countHoppers].x = x * xScale + xOffset;
+      hoppers[countHoppers].y = y * yScale + yOffset;
+      hoppers[countHoppers].isPointingUp = orientation;
+      countHoppers++;
       break;
   }
 }
 
+void leftEncoderISR() {
+  leftCount++;
+}
 
-
-
+void rightEncoderISR() {
+  rightCount++;
+}
 
 
 

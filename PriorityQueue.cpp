@@ -15,13 +15,13 @@ bool PriorityQueue::contains(Node* toSearch) const
 {
   // Go through list
   Node* node = head;
-  while(node->next != NULL)
+  while (node->next != NULL)
   {
     if (toSearch->x == node->next->x && toSearch->y == node->next->y)
     {
       return true;
     }
-    node = node->next;	
+    node = node->next;
   }
   return false;
 }
